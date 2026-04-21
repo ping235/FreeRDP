@@ -397,6 +397,19 @@ static WCHAR* wf_window_get_title(rdpSettings* settings)
 	return windowTitle;
 }
 
+static WCHAR* wf_window_get_string(rdpSettings* settings, FreeRDP_Settings_Keys_String id, const WCHAR* value)
+{
+	if (!settings)
+		return nullptr;
+
+	if (freerdp_settings_get_string(settings, id))
+	{
+		return ConvertUtf8ToWCharAlloc(freerdp_settings_get_string(settings, id), nullptr);
+	}
+
+	return value? _wcsdup(value) : nullptr;
+}
+
 static BOOL wf_post_connect(freerdp* instance)
 {
 	rdpGdi* gdi;
@@ -1496,7 +1509,7 @@ static int wfreerdp_client_start(rdpContext* context)
 	wfc->hInstance = hInstance;
 	wfc->cursor = LoadCursor(nullptr, IDC_ARROW);
 	wfc->icon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_ICON1));
-	wfc->wndClassName = _tcsdup(_T("FreeRDP"));
+	wfc->wndClassName = wf_window_get_string(settings, FreeRDP_WmClass, L"FreeRDP");
 	wfc->wndClass.cbSize = sizeof(WNDCLASSEX);
 	wfc->wndClass.style = CS_HREDRAW | CS_VREDRAW;
 	wfc->wndClass.lpfnWndProc = wf_event_proc;
