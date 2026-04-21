@@ -39,6 +39,32 @@
 #include <wf_defaults.h>
 
 #include <shellapi.h>
+#include <shlwapi.h>
+
+#define TAG CLIENT_TAG("windows")
+
+static BOOL FindArgsFile(LPWSTR name, DWORD size)
+{
+	// <exe>.args
+	GetModuleFileNameW(NULL, name, size);
+	PathRenameExtensionW(name, L".args");
+	if (PathFileExistsW(name))
+	{
+		return TRUE;
+	}
+
+	// freerdp.args
+	WCHAR path[MAX_PATH] = { 0 };
+	GetModuleFileNameW(NULL, path, _countof(path) - 1);
+	PathRemoveFileSpecW(path);
+	PathCombineW(name, path, L"freerdp.args");
+	if (PathFileExistsW(name))
+	{
+		return TRUE;
+	}
+
+	return FALSE;
+}
 
 INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
@@ -72,9 +98,25 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 		goto out;
 
 	args = CommandLineToArgvW(cmd, &argc);
-
 	if (!args || (argc <= 0))
 		goto out;
+
+	// load argument file if any, ignore cmdline args
+	WCHAR argsfile[MAX_PATH] = { 0 };
+	if (FindArgsFile(argsfile, _countof(argsfile) - 1))
+	{
+		size_t newCmdSize = wcslen(args[0]) + 3 + wcslen(L"\"/args-from:\"") + wcslen(argsfile) + 1;
+		LPWSTR newCmd = (LPWSTR)calloc(newCmdSize, 2);
+		_snwprintf(newCmd, newCmdSize, L"\"%s\" \"/args-from:%s\"", args[0], argsfile);
+		LocalFree(args);
+
+		WLog_INFO(TAG, "Find argument file, ignore cmdline args, runas: %S", newCmd);
+		args = CommandLineToArgvW(newCmd, &argc);
+		free(newCmd);
+
+		if (!args || (argc <= 0))
+			goto out;
+	}
 
 	argv = calloc((size_t)argc, sizeof(char*));
 
