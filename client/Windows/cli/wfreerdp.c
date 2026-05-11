@@ -101,13 +101,14 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	if (!args || (argc <= 0))
 		goto out;
 
-	// load argument file if any, ignore cmdline args
+	// load argument file if any & the first argument is not /?, ignore cmdline args
 	WCHAR argsfile[MAX_PATH] = { 0 };
-	if (FindArgsFile(argsfile, _countof(argsfile) - 1))
+	if (FindArgsFile(argsfile, _countof(argsfile) - 1) &&
+    (argc < 2 || wcscmp(args[1], L"/?") != 0))
 	{
-		size_t newCmdSize = wcslen(args[0]) + 3 + wcslen(L"\"/args-from:\"") + wcslen(argsfile) + 1;
+		size_t newCmdSize = wcslen(args[0]) + 3 + wcslen(L"\"/args-from:file:\"") + wcslen(argsfile) + 1;
 		LPWSTR newCmd = (LPWSTR)calloc(newCmdSize, 2);
-		_snwprintf(newCmd, newCmdSize, L"\"%s\" \"/args-from:%s\"", args[0], argsfile);
+		_snwprintf(newCmd, newCmdSize, L"\"%s\" \"/args-from:file:%s\"", args[0], argsfile);
 		LocalFree(args);
 
 		WLog_INFO(TAG, "Find argument file, ignore cmdline args, runas: %S", newCmd);
