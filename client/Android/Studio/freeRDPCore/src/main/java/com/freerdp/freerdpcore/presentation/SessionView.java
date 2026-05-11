@@ -18,20 +18,22 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.BitmapDrawable;
+import android.os.Build;
 import android.text.InputType;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
+import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 
 import androidx.annotation.NonNull;
 
 import com.freerdp.freerdpcore.application.SessionState;
-import com.freerdp.freerdpcore.services.LibFreeRDP;
 import com.freerdp.freerdpcore.utils.DoubleGestureDetector;
 import com.freerdp.freerdpcore.utils.GestureDetector;
 import com.freerdp.freerdpcore.utils.Mouse;
@@ -82,6 +84,10 @@ public class SessionView extends View
 
 	private void initSessionView(Context context)
 	{
+		// Ensure the view is focusable so the soft keyboard can attach to it (required for API 30+)
+		setFocusable(true);
+		setFocusableInTouchMode(true);
+
 		invalidRegions = new Stack<>();
 		gestureDetector = new GestureDetector(context, new SessionGestureListener(), null, true);
 		doubleGestureDetector =
@@ -103,8 +109,9 @@ public class SessionView extends View
 			float y = event.getY();
 			// Perform actions based on the hover position (x, y)
 			MotionEvent mappedEvent = mapTouchEvent(event);
-			LibFreeRDP.sendCursorEvent(currentSession.getInstance(), (int)mappedEvent.getX(),
-			                           (int)mappedEvent.getY(), Mouse.getMoveEvent());
+			sessionViewListener.onSessionViewMouseMove((int)mappedEvent.getX(),
+			                                           (int)mappedEvent.getY());
+			mappedEvent.recycle();
 		}
 		// Return true to indicate that you've handled the event
 		return true;
@@ -241,16 +248,6 @@ public class SessionView extends View
 		canvas.restore();
 	}
 
-	// dirty hack: we call back to our activity and call onBackPressed as this doesn't reach us when
-	// the soft keyboard is shown ...
-	@Override public boolean dispatchKeyEventPreIme(KeyEvent event)
-	{
-		if (event.getKeyCode() == KeyEvent.KEYCODE_BACK &&
-		    event.getAction() == KeyEvent.ACTION_DOWN)
-			((SessionActivity)this.getContext()).onBackPressed();
-		return super.dispatchKeyEventPreIme(event);
-	}
-
 	// perform mapping on the touch event's coordinates according to the current scaling
 	private MotionEvent mapTouchEvent(MotionEvent event)
 	{
@@ -274,9 +271,78 @@ public class SessionView extends View
 
 	@Override public boolean onTouchEvent(MotionEvent event)
 	{
+		// Physical mouse events: bypass gesture detector entirely.
+		// Buttons are handled in onGenericMotionEvent; hover moves in onHoverEvent.
+		// Only ACTION_MOVE with a button held (drag) needs handling here.
+		if (event.isFromSource(InputDevice.SOURCE_MOUSE))
+		{
+			int action = event.getActionMasked();
+			if (action == MotionEvent.ACTION_MOVE && event.getButtonState() != 0)
+			{
+				MotionEvent mapped = mapTouchEvent(event);
+				sessionViewListener.onSessionViewMouseMove((int)mapped.getX(), (int)mapped.getY());
+				mapped.recycle();
+				return true;
+			}
+			return true;
+		}
+
 		boolean res = gestureDetector.onTouchEvent(event);
 		res |= doubleGestureDetector.onTouchEvent(event);
 		return res;
+	}
+
+	// Handle all physical mouse buttons here; finger taps come via onSingleTapUp.
+	@Override public boolean onGenericMotionEvent(MotionEvent event)
+	{
+		if (!event.isFromSource(InputDevice.SOURCE_MOUSE))
+			return false;
+
+		int action = event.getActionMasked();
+
+		if (action == MotionEvent.ACTION_BUTTON_PRESS ||
+		    action == MotionEvent.ACTION_BUTTON_RELEASE)
+		{
+			boolean down = action == MotionEvent.ACTION_BUTTON_PRESS;
+			MotionEvent mapped = mapTouchEvent(event);
+			int x = (int)mapped.getX();
+			int y = (int)mapped.getY();
+			mapped.recycle();
+
+			switch (event.getActionButton())
+			{
+				case MotionEvent.BUTTON_PRIMARY:
+					if (down)
+						sessionViewListener.onSessionViewBeginTouch();
+					sessionViewListener.onSessionViewLeftTouch(x, y, down);
+					if (!down)
+						sessionViewListener.onSessionViewEndTouch();
+					return true;
+				case MotionEvent.BUTTON_SECONDARY:
+					if (down)
+						sessionViewListener.onSessionViewBeginTouch();
+					sessionViewListener.onSessionViewRightTouch(x, y, down);
+					return true;
+				case MotionEvent.BUTTON_TERTIARY:
+					sessionViewListener.onSessionViewMiddleTouch(x, y, down);
+					return true;
+				default:
+					return true; // consume unknown buttons silently
+			}
+		}
+
+		if (action == MotionEvent.ACTION_SCROLL)
+		{
+			float vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+			float hScroll = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
+			if (vScroll != 0)
+				sessionViewListener.onSessionViewScroll(vScroll > 0);
+			if (hScroll != 0)
+				sessionViewListener.onSessionViewHScroll(hScroll > 0);
+			return true;
+		}
+
+		return false;
 	}
 
 	public interface SessionViewListener
@@ -287,11 +353,17 @@ public class SessionView extends View
 
 		void onSessionViewLeftTouch(int x, int y, boolean down);
 
+		void onSessionViewMiddleTouch(int x, int y, boolean down);
+
 		void onSessionViewRightTouch(int x, int y, boolean down);
 
 		void onSessionViewMove(int x, int y);
 
+		void onSessionViewMouseMove(int x, int y);
+
 		void onSessionViewScroll(boolean down);
+
+		void onSessionViewHScroll(boolean right);
 	}
 
 	private class SessionGestureListener extends GestureDetector.SimpleOnGestureListener
@@ -353,28 +425,18 @@ public class SessionView extends View
 
 		public boolean onSingleTapUp(MotionEvent e)
 		{
-			// send single click
+			// Physical mouse buttons are handled via ACTION_BUTTON_PRESS in onGenericMotionEvent.
+			// If buttonState is non-zero this event came from a physical mouse button
+			if (e.getButtonState() != 0)
+				return false;
+
+			// Finger touch -> left click
 			MotionEvent mappedEvent = mapTouchEvent(e);
 			sessionViewListener.onSessionViewBeginTouch();
-			switch (e.getButtonState())
-			{
-				case MotionEvent.BUTTON_PRIMARY:
-					sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
-					                                           (int)mappedEvent.getY(), true);
-					sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
-					                                           (int)mappedEvent.getY(), false);
-					break;
-				case MotionEvent.BUTTON_SECONDARY:
-					sessionViewListener.onSessionViewRightTouch((int)mappedEvent.getX(),
-					                                            (int)mappedEvent.getY(), true);
-					sessionViewListener.onSessionViewRightTouch((int)mappedEvent.getX(),
-					                                            (int)mappedEvent.getY(), false);
-					sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
-					                                           (int)mappedEvent.getY(), true);
-					sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
-					                                           (int)mappedEvent.getY(), false);
-					break;
-			}
+			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
+			                                           (int)mappedEvent.getY(), true);
+			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
+			                                           (int)mappedEvent.getY(), false);
 			sessionViewListener.onSessionViewEndTouch();
 			return true;
 		}
@@ -436,8 +498,10 @@ public class SessionView extends View
 
 	@Override public InputConnection onCreateInputConnection(EditorInfo outAttrs)
 	{
-		super.onCreateInputConnection(outAttrs);
-		outAttrs.inputType = InputType.TYPE_CLASS_TEXT;
-		return null;
+		outAttrs.actionLabel = null;
+		outAttrs.inputType = InputType.TYPE_NULL;
+		outAttrs.imeOptions = EditorInfo.IME_ACTION_NONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI |
+		                      EditorInfo.IME_FLAG_NO_FULLSCREEN;
+		return new BaseInputConnection(this, false);
 	}
 }

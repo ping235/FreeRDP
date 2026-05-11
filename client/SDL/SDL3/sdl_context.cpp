@@ -36,6 +36,8 @@
 #include <aad/sdl_webview.hpp>
 #endif
 
+static constexpr auto sdl_allow_screensaver = "sdl-allow-screensaver";
+
 static void sdl_PointerFreeCopyAll(rdpPointer* pointer)
 {
 	sdl_Pointer_FreeCopy(pointer);
@@ -71,6 +73,12 @@ SdlContext::SdlContext(rdpContext* context)
 	instance->GetAccessToken = client_cli_get_access_token;
 #endif
 	/* TODO: Client display set up */
+
+	_args.push_back({ sdl_allow_screensaver, COMMAND_LINE_VALUE_BOOL, nullptr, BoolValueFalse,
+	                  nullptr, -1, nullptr, "Allow local screensaver to activate" });
+
+	/* Push a null element used as abort when iterating the array */
+	_args.push_back({ nullptr, 0, nullptr, nullptr, nullptr, -1, nullptr, nullptr });
 }
 
 void SdlContext::setHasCursor(bool val)
@@ -453,7 +461,7 @@ bool SdlContext::updateWindowList()
 	// none of the kept windows cover the original primary.
 	if (!list.empty() &&
 	    std::none_of(list.cbegin(), list.cend(), [](const rdpMonitor& m) { return m.is_primary; }))
-		list[0].is_primary = true;
+		list.at(0).is_primary = true;
 
 	return freerdp_settings_set_monitor_def_array_sorted(context()->settings, list.data(),
 	                                                     list.size());
@@ -1109,6 +1117,8 @@ bool SdlContext::handleEvent(const SDL_WindowEvent& ev)
 		case SDL_EVENT_WINDOW_MOUSE_ENTER:
 			return restoreCursor();
 		case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+			if (!resizeToScale(window))
+				return false;
 			if (isConnected())
 			{
 				if (!window->fill())
@@ -1120,6 +1130,8 @@ bool SdlContext::handleEvent(const SDL_WindowEvent& ev)
 			}
 			break;
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+			if (!resizeToScale(window))
+				return false;
 			if (!window->fill())
 				return false;
 			if (!drawToWindow(*window))
@@ -1409,6 +1421,74 @@ bool SdlContext::handleEvent(const SDL_Event& ev)
 	}
 }
 
+COMMAND_LINE_ARGUMENT_A* SdlContext::args()
+{
+	return _args.data();
+}
+
+size_t SdlContext::argsCount() const
+{
+	if (_args.size() <= 1)
+		return 0;
+	return _args.size() - 1;
+}
+
+int SdlContext::argumentHandler(const COMMAND_LINE_ARGUMENT_A* arg, void* custom)
+{
+	auto sdl = static_cast<SdlContext*>(custom);
+	if (!sdl)
+		return -1;
+
+	if (arg->Name)
+	{
+		if (strcmp(arg->Name, sdl_allow_screensaver) == 0)
+		{
+			if (arg->Value != nullptr)
+			{
+				if (!SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "1"))
+				{
+					SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+					             "SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER) failed with %s",
+					             SDL_GetError());
+					return -2;
+				}
+			}
+		}
+	}
+	return 0;
+}
+
+CriticalSection& SdlContext::lock()
+{
+	return _critical;
+}
+
+std::vector<rdpPointer*>& SdlContext::pointers()
+{
+	return _valid_pointers;
+}
+
+bool SdlContext::contains(const rdpPointer* ptr) const
+{
+	for (const auto& cur : _valid_pointers)
+	{
+		if (cur == ptr)
+			return true;
+	}
+	return false;
+}
+
+bool SdlContext::resizeToScale(SdlWindow* window)
+{
+	if (freerdp_settings_get_bool(context()->settings, FreeRDP_SmartSizing))
+		return true;
+	if (!useLocalScale())
+		return true;
+	if (!window)
+		return false;
+	return window->resizeToScale();
+}
+
 bool SdlContext::useLocalScale() const
 {
 	const auto ssize = freerdp_settings_get_bool(context()->settings, FreeRDP_SmartSizing);
@@ -1521,6 +1601,10 @@ bool SdlContext::setCursor(CursorType type)
 
 bool SdlContext::setCursor(const rdpPointer* cursor)
 {
+	std::unique_lock lock(_critical);
+	if (!contains(cursor))
+		return true;
+
 	_cursor = { sdl_Pointer_Copy(cursor), sdl_PointerFreeCopyAll };
 	return setCursor(CURSOR_IMAGE);
 }

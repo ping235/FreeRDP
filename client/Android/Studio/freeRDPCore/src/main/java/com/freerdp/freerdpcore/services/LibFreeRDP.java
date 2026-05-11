@@ -20,10 +20,10 @@ import androidx.collection.LongSparseArray;
 import com.freerdp.freerdpcore.application.GlobalApp;
 import com.freerdp.freerdpcore.application.SessionState;
 import com.freerdp.freerdpcore.domain.BookmarkBase;
-import com.freerdp.freerdpcore.domain.ManualBookmark;
 import com.freerdp.freerdpcore.presentation.ApplicationSettingsActivity;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -214,14 +214,7 @@ public class LibFreeRDP
 
 	public static boolean cancelConnection(long inst)
 	{
-		synchronized (mInstanceState)
-		{
-			if (mInstanceState.get(inst, false))
-			{
-				return freerdp_disconnect(inst);
-			}
-			return true;
-		}
+		return freerdp_disconnect(inst);
 	}
 
 	private static String addFlag(String name, boolean enabled)
@@ -256,11 +249,39 @@ public class LibFreeRDP
 			return false;
 		}
 
-		int port = bookmark.<ManualBookmark>get().getPort();
-		String hostname = bookmark.<ManualBookmark>get().getHostname();
+		int port = bookmark.getPort();
+		String hostname = bookmark.getHostname();
 
 		args.add("/v:" + hostname);
 		args.add("/port:" + port);
+
+		final int level = advanced.getTlsSecLevel();
+		List<String> tls = new ArrayList<>();
+
+		if (level >= 0)
+		{
+			tls.add("seclevel:" + level);
+		}
+
+		final int tlsMinLevel = advanced.getTlsMinLevel();
+		if (tlsMinLevel >= 0)
+		{
+			tls.add("enforce:" + tlsMinLevel);
+		}
+
+		if (!tls.isEmpty())
+		{
+			StringBuilder sb = new StringBuilder();
+			for (String s : tls)
+			{
+				if (sb.length() > 0)
+				{
+					sb.append(',');
+				}
+				sb.append(s);
+			}
+			args.add("/tls:" + sb);
+		}
 
 		arg = bookmark.getUsername();
 		if (!arg.isEmpty())
@@ -355,11 +376,9 @@ public class LibFreeRDP
 		args.add("/clipboard");
 
 		// Gateway enabled?
-		if (bookmark.getType() == BookmarkBase.TYPE_MANUAL &&
-		    bookmark.<ManualBookmark>get().getEnableGatewaySettings())
+		if (bookmark.getType() == BookmarkBase.TYPE_MANUAL && bookmark.getEnableGatewaySettings())
 		{
-			ManualBookmark.GatewaySettings gateway =
-			    bookmark.<ManualBookmark>get().getGatewaySettings();
+			BookmarkBase.GatewaySettings gateway = bookmark.getGatewaySettings();
 
 			StringBuilder carg = new StringBuilder();
 			carg.append(

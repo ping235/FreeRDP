@@ -94,7 +94,12 @@ auth_status utils_authenticate_gateway(freerdp* instance, rdp_auth_reason reason
 		return AUTH_SKIP;
 	}
 
-#if !defined(WITH_FREERDP_DEPRECATED)
+#if !defined(WITHOUT_FREERDP_3x_DEPRECATED)
+	WINPR_PRAGMA_DIAG_PUSH
+	WINPR_PRAGMA_DIAG_IGNORED_DEPRECATED_DECL
+#endif
+
+#if defined(WITHOUT_FREERDP_3x_DEPRECATED)
 	if (!instance->AuthenticateEx)
 		return AUTH_NO_CREDENTIALS;
 #else
@@ -110,7 +115,7 @@ auth_status utils_authenticate_gateway(freerdp* instance, rdp_auth_reason reason
 		if (!proceed)
 			return AUTH_CANCELLED;
 	}
-#if defined(WITH_FREERDP_DEPRECATED)
+#if !defined(WITHOUT_FREERDP_3x_DEPRECATED)
 	else
 	{
 		proceed =
@@ -119,6 +124,10 @@ auth_status utils_authenticate_gateway(freerdp* instance, rdp_auth_reason reason
 		if (!proceed)
 			return AUTH_CANCELLED;
 	}
+#endif
+
+#if !defined(WITHOUT_FREERDP_3x_DEPRECATED)
+	WINPR_PRAGMA_DIAG_POP
 #endif
 
 	if (utils_str_is_empty(settings->GatewayUsername) ||
@@ -197,8 +206,13 @@ auth_status utils_authenticate(freerdp* instance, rdp_auth_reason reason, BOOL o
 			break;
 	}
 
+#if !defined(WITHOUT_FREERDP_3x_DEPRECATED)
+	WINPR_PRAGMA_DIAG_PUSH
+	WINPR_PRAGMA_DIAG_IGNORED_DEPRECATED_DECL
+#endif
+
 	/* If no callback is specified still continue connection */
-#if !defined(WITH_FREERDP_DEPRECATED)
+#if defined(WITHOUT_FREERDP_3x_DEPRECATED)
 	if (!instance->AuthenticateEx)
 		return AUTH_NO_CREDENTIALS;
 #else
@@ -212,7 +226,7 @@ auth_status utils_authenticate(freerdp* instance, rdp_auth_reason reason, BOOL o
 		if (!proceed)
 			return AUTH_CANCELLED;
 	}
-#if defined(WITH_FREERDP_DEPRECATED)
+#if !defined(WITHOUT_FREERDP_3x_DEPRECATED)
 	else
 	{
 		proceed = instance->Authenticate(instance, &settings->Username, &settings->Password,
@@ -220,6 +234,10 @@ auth_status utils_authenticate(freerdp* instance, rdp_auth_reason reason, BOOL o
 		if (!proceed)
 			return AUTH_NO_CREDENTIALS;
 	}
+#endif
+
+#if !defined(WITHOUT_FREERDP_3x_DEPRECATED)
+	WINPR_PRAGMA_DIAG_POP
 #endif
 
 	if (utils_str_is_empty(settings->Username) || utils_str_is_empty(settings->Password))

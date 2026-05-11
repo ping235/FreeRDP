@@ -28,6 +28,16 @@
 
 #include "h264.h"
 
+#ifdef WITH_VIDEOTOOLBOX
+#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(55, 9, 0)
+#include <libavutil/hwcontext.h>
+#else
+#pragma warning You have asked for VideoToolbox decoding, \
+    but your version of libavutil is too old !Disabling.
+#undef WITH_VIDEOTOOLBOX
+#endif
+#endif
+
 #ifdef WITH_VAAPI
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(55, 9, 0)
 #include <libavutil/hwcontext.h>
@@ -81,13 +91,14 @@ typedef struct
 	AVPacket bufferpacket;
 #endif
 	AVPacket* packet;
-#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING)
+#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING) || defined(WITH_VIDEOTOOLBOX)
 	AVBufferRef* hwctx;
 	AVFrame* hwVideoFrame;
 	enum AVPixelFormat hw_pix_fmt;
-#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(57, 80, 100)
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(57, 80, 100) || defined(WITH_VIDEOTOOLBOX)
 	AVBufferRef* hw_frames_ctx;
 #endif
+
 #endif
 } H264_CONTEXT_LIBAVCODEC;
 
@@ -293,21 +304,21 @@ static int libavcodec_decompress(H264_CONTEXT* WINPR_RESTRICT h264,
 
 	sys->videoFrame->format = AV_PIX_FMT_YUV420P;
 
-#ifdef WITH_VAAPI
-		status = avcodec_receive_frame(sys->codecDecoderContext,
-		                               sys->hwctx ? sys->hwVideoFrame : sys->videoFrame);
+#if defined(WITH_VAAPI) || defined(WITH_VIDEOTOOLBOX)
+	status = avcodec_receive_frame(sys->codecDecoderContext,
+	                               sys->hwctx ? sys->hwVideoFrame : sys->videoFrame);
 #else
-		status = avcodec_receive_frame(sys->codecDecoderContext, sys->videoFrame);
+	status = avcodec_receive_frame(sys->codecDecoderContext, sys->videoFrame);
 #endif
-	    if (status == AVERROR(EAGAIN))
-	    {
-		    rc = 0;
-		    goto fail;
-	    }
+	if (status == AVERROR(EAGAIN))
+	{
+		rc = 0;
+		goto fail;
+	}
 
 	gotFrame = (status == 0);
 #else
-#ifdef WITH_VAAPI
+#if defined(WITH_VAAPI) || defined(WITH_VIDEOTOOLBOX)
 	status =
 	    avcodec_decode_video2(sys->codecDecoderContext,
 	                          sys->hwctx ? sys->hwVideoFrame : sys->videoFrame, &gotFrame, packet);
@@ -321,7 +332,7 @@ static int libavcodec_decompress(H264_CONTEXT* WINPR_RESTRICT h264,
 		goto fail;
 	}
 
-#ifdef WITH_VAAPI
+#if defined(WITH_VAAPI) || defined(WITH_VIDEOTOOLBOX)
 
 	if (sys->hwctx)
 	{
@@ -358,7 +369,6 @@ static int libavcodec_decompress(H264_CONTEXT* WINPR_RESTRICT h264,
 		iStride[0] = (UINT32)MAX(0, sys->videoFrame->linesize[0]);
 		iStride[1] = (UINT32)MAX(0, sys->videoFrame->linesize[1]);
 		iStride[2] = (UINT32)MAX(0, sys->videoFrame->linesize[2]);
-
 		rc = 1;
 	}
 	else
@@ -561,7 +571,7 @@ static void libavcodec_uninit(H264_CONTEXT* h264)
 #endif
 	}
 
-#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING)
+#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING) || defined(WITH_VIDEOTOOLBOX)
 	if (sys->hwVideoFrame)
 	{
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(55, 18, 102)
@@ -574,7 +584,7 @@ static void libavcodec_uninit(H264_CONTEXT* h264)
 	if (sys->hwctx)
 		av_buffer_unref(&sys->hwctx);
 
-#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(57, 80, 100)
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(57, 80, 100) || defined(WITH_VIDEOTOOLBOX)
 
 	if (sys->hw_frames_ctx)
 		av_buffer_unref(&sys->hw_frames_ctx);
@@ -601,7 +611,7 @@ static void libavcodec_uninit(H264_CONTEXT* h264)
 	h264->pSystemData = nullptr;
 }
 
-#ifdef WITH_VAAPI
+#if defined(WITH_VAAPI) || defined(WITH_VIDEOTOOLBOX)
 static enum AVPixelFormat libavcodec_get_format(struct AVCodecContext* ctx,
                                                 const enum AVPixelFormat* fmts)
 {
@@ -617,7 +627,10 @@ static enum AVPixelFormat libavcodec_get_format(struct AVCodecContext* ctx,
 	{
 		if (*p == sys->hw_pix_fmt)
 		{
-#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(57, 80, 100)
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(57, 80, 100) || defined(WITH_VIDEOTOOLBOX)
+			if (sys->hw_frames_ctx)
+				av_buffer_unref(&sys->hw_frames_ctx);
+
 			sys->hw_frames_ctx = av_hwframe_ctx_alloc(sys->hwctx);
 
 			if (!sys->hw_frames_ctx)
@@ -630,9 +643,13 @@ static enum AVPixelFormat libavcodec_get_format(struct AVCodecContext* ctx,
 			frames->format = *p;
 			frames->height = sys->codecDecoderContext->coded_height;
 			frames->width = sys->codecDecoderContext->coded_width;
+#ifdef WITH_VIDEOTOOLBOX
+			frames->sw_format = AV_PIX_FMT_YUV420P;
+#else
 			frames->sw_format =
 			    (sys->codecDecoderContext->sw_pix_fmt == AV_PIX_FMT_YUV420P10 ? AV_PIX_FMT_P010
 			                                                                  : AV_PIX_FMT_NV12);
+#endif
 			frames->initial_pool_size = 20;
 
 			if (sys->codecDecoderContext->active_thread_type & FF_THREAD_FRAME)
@@ -727,6 +744,32 @@ static BOOL libavcodec_init(H264_CONTEXT* h264)
 	fail_hwdevice_create:
 #endif
 
+#ifdef WITH_VIDEOTOOLBOX
+
+		if (!sys->hwctx)
+		{
+			int ret = av_hwdevice_ctx_create(&sys->hwctx, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, nullptr,
+			                                 nullptr, 0);
+
+			if (ret < 0)
+			{
+				WLog_Print(
+				    h264->log, WLOG_ERROR,
+				    "Could not initialize VideoToolbox decoder, falling back to software: %s",
+				    av_err2str(ret));
+				sys->hwctx = nullptr;
+				goto fail_vt_create;
+			}
+		}
+		WLog_Print(h264->log, WLOG_INFO, "Using VideoToolbox for accelerated H264 decoding");
+
+		sys->codecDecoderContext->get_format = libavcodec_get_format;
+		sys->hw_pix_fmt = AV_PIX_FMT_VIDEOTOOLBOX;
+		sys->codecDecoderContext->hw_device_ctx = av_buffer_ref(sys->hwctx);
+		sys->codecDecoderContext->opaque = (void*)h264;
+	fail_vt_create:
+#endif
+
 		if (avcodec_open2(sys->codecDecoderContext, sys->codecDecoder, nullptr) < 0)
 		{
 			WLog_Print(h264->log, WLOG_ERROR, "Failed to open libav codec");
@@ -779,7 +822,7 @@ static BOOL libavcodec_init(H264_CONTEXT* h264)
 
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(55, 18, 102)
 	sys->videoFrame = av_frame_alloc();
-#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING)
+#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING) || defined(WITH_VIDEOTOOLBOX)
 	sys->hwVideoFrame = av_frame_alloc();
 #endif
 #else
@@ -792,7 +835,7 @@ static BOOL libavcodec_init(H264_CONTEXT* h264)
 		goto EXCEPTION;
 	}
 
-#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING)
+#if defined(WITH_VAAPI) || defined(WITH_VAAPI_H264_ENCODING) || defined(WITH_VIDEOTOOLBOX)
 	if (!sys->hwVideoFrame)
 	{
 		WLog_Print(h264->log, WLOG_ERROR, "Failed to allocate libav hw frame");

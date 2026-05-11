@@ -1551,7 +1551,9 @@ static gdiGfxCacheEntry* gdi_GfxCacheEntryNew(UINT64 cacheKey, UINT32 width, UIN
 	cacheEntry->width = width;
 	cacheEntry->height = height;
 	cacheEntry->format = format;
-	cacheEntry->scanline = gfx_align_scanline(cacheEntry->width * 4, 16);
+
+	const UINT32 bpp = MAX(4, FreeRDPGetBytesPerPixel(format));
+	cacheEntry->scanline = gfx_align_scanline(cacheEntry->width * bpp, 16);
 
 	if ((cacheEntry->width > 0) && (cacheEntry->height > 0))
 	{
@@ -1659,10 +1661,12 @@ static UINT gdi_CacheToSurface(RdpgfxClientContext* context,
 		if (!is_rect_valid(&rect, surface->width, surface->height))
 			goto fail;
 
+		const UINT32 w = rect.right - rect.left;
+		const UINT32 h = rect.bottom - rect.top;
 		if (!freerdp_image_copy_no_overlap(surface->data, surface->format, surface->scanline,
-		                                   destPt->x, destPt->y, cacheEntry->width,
-		                                   cacheEntry->height, cacheEntry->data, cacheEntry->format,
-		                                   cacheEntry->scanline, 0, 0, nullptr, FREERDP_FLIP_NONE))
+		                                   destPt->x, destPt->y, w, h, cacheEntry->data,
+		                                   cacheEntry->format, cacheEntry->scanline, 0, 0, nullptr,
+		                                   FREERDP_FLIP_NONE))
 			goto fail;
 
 		invalidRect = rect;
