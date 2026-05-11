@@ -66,6 +66,18 @@ static BOOL FindArgsFile(LPWSTR name, DWORD size)
 	return FALSE;
 }
 
+static BOOL ArgExists(LPWSTR* args, int argc, LPWSTR arg)
+{
+	for (int i = 1; i < argc; i++)
+	{
+		if(wcscmp(args[i], arg) == 0)
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
 	int status;
@@ -103,8 +115,7 @@ INT WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 	// load argument file if any & the first argument is not /?, ignore cmdline args
 	WCHAR argsfile[MAX_PATH] = { 0 };
-	if (FindArgsFile(argsfile, _countof(argsfile) - 1) &&
-    (argc < 2 || wcscmp(args[1], L"/?") != 0))
+	if (FindArgsFile(argsfile, _countof(argsfile) - 1) && !ArgExists(args, argc, L"/?"))
 	{
 		size_t newCmdSize = wcslen(args[0]) + 3 + wcslen(L"\"/args-from:file:\"") + wcslen(argsfile) + 1;
 		LPWSTR newCmd = (LPWSTR)calloc(newCmdSize, 2);
